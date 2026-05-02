@@ -1,0 +1,163 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # FastAPI AI Backend
+  # ============================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: logistics-copilot-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - DEBUG=False
+    volumes:
+      - ./app:/app/app
+      - ./data:/app/data
+    depends_on:
+      - redis
+    networks:
+      - copilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================================================
+  # React Frontend
+  # ============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: logistics-copilot-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - backend
+    networks:
+      - copilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # Laravel Marketing Service
+  # ============================================================================
+  laravel-service:
+    build:
+      context: ./laravel-service
+      dockerfile: ../docker/Dockerfile.laravel
+    container_name: logistics-copilot-laravel
+    ports:
+      - "8001:8000"
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_KEY=${LARAVEL_APP_KEY:-base64:YOUR_KEY_HERE}
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_DATABASE:-logistics_copilot}
+      - DB_USERNAME=${DB_USERNAME:-copilot_user}
+      - DB_PASSWORD=${DB_PASSWORD:-secure_password_123}
+      - CACHE_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./laravel-service:/var/www/html
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - copilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # MySQL Database
+  # ============================================================================
+  mysql:
+    image: mysql:8.0
+    container_name: logistics-copilot-mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-logistics_copilot}
+      MYSQL_USER: ${DB_USERNAME:-copilot_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secure_password_123}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password_123}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - copilot-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Redis Cache & Queue
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: logistics-copilot-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - copilot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Nginx Reverse Proxy (Optional)
+  # ============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: logistics-copilot-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+      - laravel-service
+    networks:
+      - copilot-network
+
+volumes:
+  mysql-data:
+  redis-data:
+
+networks:
+  copilot-network:
+    driver: bridge
